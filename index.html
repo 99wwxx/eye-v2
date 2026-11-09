@@ -1,0 +1,538 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>NADAREO Eye</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400&display=swap">
+<style>
+/* NADAREO opening, prototype 1: an old television with an eye that watches you. */
+:root { --bg: #020303; --fg: #E6EEEA; --mute: rgba(230, 238, 234, .58); --cream: #FBF6F1; --ink: #1C1C24; --ease: cubic-bezier(.16, 1, .3, 1); color-scheme: dark; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); overflow: hidden; font-family: 'Jost', system-ui, -apple-system, 'Segoe UI', sans-serif; -webkit-font-smoothing: antialiased; }
+canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+.fallback { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.ui { position: fixed; inset: 0; pointer-events: none; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.ui > * { pointer-events: auto; transition: opacity .6s var(--ease); }
+.brand { position: absolute; left: 0; right: 0; top: var(--brandY, 7vh); margin: 0; text-align: center; font-weight: 300; font-size: clamp(13px, 1.1vw, 17px); letter-spacing: .44em; padding-left: .44em; }
+.enter { position: absolute; left: 50%; top: var(--enterY, 80vh); transform: translateX(-50%); background: none; border: 0; color: var(--fg); font: 400 clamp(16px, 1.3vw, 20px)/1 'Jost', system-ui, sans-serif; letter-spacing: .1em; padding: 14px 26px 18px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.enter::after { content: ''; position: absolute; left: 26px; right: 26px; bottom: 9px; height: 1px; background: currentColor; transform-origin: 50% 50%; transition: transform .8s var(--ease); }
+.enter:hover::after, .enter:focus-visible::after { transform: scaleX(.12); }
+.enter:focus-visible { outline: 1px solid var(--mute); outline-offset: 2px; }
+.line { position: absolute; left: 0; right: 0; top: calc(var(--enterY, 80vh) + 64px); margin: 0; text-align: center; font-weight: 300; font-size: clamp(13px, 1vw, 15px); letter-spacing: .05em; color: var(--mute); }
+.ui.gone > * { opacity: 0; pointer-events: none; }
+.ui.hold > * { opacity: 0; }
+.end { position: fixed; inset: 0; display: grid; place-content: center; justify-items: center; gap: 18px; text-align: center; background: var(--cream); color: var(--ink); padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); opacity: 0; transition: opacity 1.1s var(--ease); }
+.end.on { opacity: 1; }
+.end-k { margin: 0; font-size: 12px; letter-spacing: .3em; text-transform: uppercase; color: rgba(28, 28, 36, .55); }
+.end h1 { margin: 0; font-weight: 400; font-size: clamp(34px, 5vw, 72px); line-height: 1; letter-spacing: -.02em; text-wrap: balance; }
+.end p.t { margin: 0; max-width: 40ch; font-size: 16px; line-height: 1.5; color: rgba(28, 28, 36, .7); }
+.end button { margin-top: 10px; background: var(--ink); color: var(--cream); border: 0; border-radius: 999px; height: 46px; padding: 0 24px; font: 400 15px/1 'Jost', system-ui, sans-serif; letter-spacing: .04em; cursor: pointer; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<canvas id="gl" aria-hidden="true"></canvas>
+<div class="ui hold" id="ui">
+  <p class="brand">NADAREO</p>
+  <button class="enter" id="enter" type="button">Enter</button>
+  <p class="line">Product films and websites for independent brands.</p>
+</div>
+<section class="end" id="end" hidden>
+  <p class="end-k">Step 2</p>
+  <h1>The world begins here.</h1>
+  <p class="t">Through the door you land in the pastel world. That is the next thing we build.</p>
+  <button type="button" id="again">Watch it again</button>
+</section>
+<script>
+(() => {
+'use strict';
+// ---------- what we measured on the photograph (pixels of tv.webp, 1536 x 1024) ----------
+const IMG = [1536, 1024];
+const TV_BOX = [370, 125, 1166, 835];            // the television, base included
+const TV_MID = [768, 480];
+const IRIS = [818, 442];                         // iris centre (radius 100)
+const SCREEN_MID = [769, 459];                   // glass centre (half size 332 x 241)
+// the eye opening: upper lash line and lower lid, sampled every 50 px from x = 550 to 1050
+const UPPER = [480, 420, 402, 390, 382, 379, 382, 392, 415, 450, 490];
+const LOWER = [500, 510, 520, 527, 534, 537, 536, 531, 522, 507, 492];
+// the film (for-video/close-1.mp4, 24 fps), the eye region only, in a 5 x 5 sheet:
+//   0-12  = frames 140-152, the eye opening (12 matches the picture looking at (-1, 0))
+//   13-28 = frames 158-173, the eye closing (13 matches the picture looking at (-4, -1))
+const OPEN0 = 0, OPEN1 = 12, CLOSE0 = 13, CLOSE1 = 28, FILM_FPS = 24, G_OPEN = [-1, 0], G_CLOSE = [-4, -1];
+
+const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const $ = s => document.querySelector(s);
+const ui = $('#ui'), btn = $('#enter'), endEl = $('#end');
+const cv = $('#gl');
+const gl = cv.getContext('webgl', { antialias: false, alpha: false, depth: false, stencil: false, powerPreference: 'high-performance' });
+
+const VS = `attribute vec2 a; void main(){ gl_Position = vec4(a, 0.0, 1.0); }`;
+const FS = `
+precision highp float;
+uniform sampler2D uTv, uBlink;
+uniform vec2 uRes, uDot, uGaze;
+uniform vec3 uPlace, uBg;
+uniform float uU[11], uL[11];
+uniform float uClose, uBlinkMix, uHasBlink, uTime, uOffT, uDoor, uGlitch;
+uniform float uLidG, uPupil, uStatic, uRoll, uFA, uFB, uFK, uAlt, uAltK;
+uniform vec3 uFace;
+const vec2 IMG = vec2(1536.0, 1024.0);
+const vec2 IRIS = vec2(818.0, 442.0); const float IR = 100.0;
+const vec2 SC = vec2(769.0, 459.0), SH = vec2(332.0, 241.0);
+const vec2 BL0 = vec2(468.0, 250.4), BLS = vec2(654.0, 350.0);
+
+float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+vec3 tv(vec2 q) { return texture2D(uTv, clamp(q, vec2(0.5), IMG - 0.5) / IMG).rgb; }
+float upper(float x) {
+  float f = clamp((x - 550.0) / 50.0, 0.0, 9.999), y = uU[0];
+  for (int i = 0; i < 10; i++) { float fi = float(i); if (f >= fi && f < fi + 1.0) y = mix(uU[i], uU[i + 1], f - fi); }
+  return y;
+}
+float lower(float x) {
+  float f = clamp((x - 550.0) / 50.0, 0.0, 9.999), y = uL[0];
+  for (int i = 0; i < 10; i++) { float fi = float(i); if (f >= fi && f < fi + 1.0) y = mix(uL[i], uL[i + 1], f - fi); }
+  return y;
+}
+
+// ---- the looking frames: real film frames of the eye looking every way (assets/gaze.js), 6 per row ----
+uniform sampler2D uG0;
+uniform float uHasG, uGRows, uKA, uKB, uKMix;
+uniform vec2 uLookA, uLookB, uResA, uResB, uTrust;
+const vec2 GT0 = vec2(500.0, 285.0), GTS = vec2(600.0, 300.0);
+vec3 gtile(float k, vec2 l) {
+  l = clamp(l, vec2(1.0) / GTS, vec2(1.0) - vec2(1.0) / GTS);
+  float col = mod(k + 0.001, 6.0), row = floor(k / 6.0 + 0.001);
+  return texture2D(uG0, (vec2(floor(col), row) + l) / vec2(6.0, uGRows)).rgb;
+}
+// the picture as film frame k shows it: that frame around the eye, the still everywhere else (k < 0: the still)
+vec3 pic(vec2 q, float k) {
+  if (k < 0.0 || uHasG < 0.5) return tv(q);
+  vec2 l = (q - GT0) / GTS;
+  if (l.x <= 0.0 || l.y <= 0.0 || l.x >= 1.0 || l.y >= 1.0) return tv(q);
+  vec2 e = min(l, 1.0 - l) * GTS;
+  return mix(tv(q), gtile(k, l), smoothstep(0.0, 36.0, min(e.x, e.y)));
+}
+// the eye in frame k, which looks at [look]; [res] is the small extra look drawn on top of it (the iris slides,
+// the white fills in behind it, the upper lid follows), and uClose can close it when no film is loaded yet
+vec3 eye(vec2 q, float k, vec2 look, vec2 res, float trust) {
+  if (trust < 0.5 && uClose <= 0.0) return pic(q, k);       // a far look: the film frame as it is
+  if (q.x < 548.0 || q.x > 1052.0 || q.y < 270.0 || q.y > 560.0) return pic(q, k);
+  float corner = smoothstep(552.0, 640.0, q.x) * smoothstep(1048.0, 975.0, q.x);
+  // in this frame the lids sit where its look put them: up raises the upper lid, down lowers it
+  float yu = upper(q.x) + (look.y < 0.0 ? 0.6 : 0.9) * look.y * corner, yl = lower(q.x) + 0.2 * look.y * corner, open = yl - yu;
+  float s = min(open, uClose * open + uLidG * (1.0 - uClose)) * corner;
+  float H = 95.0, top = yu - H, Yu = yu + s;
+  if (q.y < top) return pic(q, k);
+  if (q.y < Yu) {                                   // the upper lid comes down: the lash edge moves as one piece, the skin above it stretches
+    float M = 42.0, sy;
+    if (q.y > Yu - M) sy = q.y - s; else sy = top + (q.y - top) * (H - M) / (H - M + s);
+    return pic(vec2(q.x, sy), k) * (1.0 - 0.18 * uClose * smoothstep(top, Yu, q.y));
+  }
+  if (q.y > yl) return pic(q, k);
+  vec2 c0 = IRIS + look, c = c0 + res;
+  float d = length(q - c), d0 = length(q - c0);
+  vec3 white = pic(q, k);
+  if (d0 < IR + 9.0 && dot(res, res) > 0.01) {     // where the iris was: the white, carried in from both sides
+    float w = sqrt(max((IR + 9.0) * (IR + 9.0) - (q.y - c0.y) * (q.y - c0.y), 0.0)) + 3.0;
+    vec3 L = pic(vec2(c0.x - w, q.y), k), R = pic(vec2(c0.x + w, q.y), k);
+    white = mix(white, mix(L, R, smoothstep(c0.x - w, c0.x + w, q.x)), smoothstep(IR + 9.0, IR + 3.0, d0));
+  }
+  white *= 1.0 - 0.26 * smoothstep(IR + 16.0, IR, d) * smoothstep(0.0, 3.0, length(res));
+  // the iris, with the pupil breathing: above 1 it opens, below 1 it narrows
+  vec2 v = q - c; float rr = min(length(v) / IR, 1.0);
+  vec3 iris = pic(c0 + v / (1.0 + (uPupil - 1.0) * (1.0 - rr * rr)), k);
+  vec3 col = mix(white, iris, smoothstep(IR + 1.0, IR - 1.5, d));
+  col *= 1.0 - 0.4 * smoothstep(9.0, 0.0, q.y - Yu) * step(0.5, s);   // the lashes shade the eye under them
+  return col;
+}
+// the film frames: 29 frames of the eye in a 5 x 6 sheet
+vec3 sheet(float i, vec2 l) {
+  l = clamp(l, vec2(1.0) / BLS, vec2(1.0) - vec2(1.0) / BLS);
+  float col = mod(i + 0.001, 5.0), row = floor(i / 5.0 + 0.001);
+  return texture2D(uBlink, (vec2(floor(col), row) + l) / vec2(5.0, 6.0)).rgb;
+}
+vec3 screen(vec2 q) {
+  q = SC + (q - SC) * uFace.z + uFace.xy;          // the face on the screen is alive: it drifts a hair, it breathes
+  vec3 c = eye(q, uKA, uLookA, uResA, uTrust.x);
+  if (uKMix > 0.0) c = mix(c, eye(q, uKB, uLookB, uResB, uTrust.y), uKMix);   // a saccade: one real frame hands over to the next
+  if (uHasBlink > 0.5 && uBlinkMix > 0.0) {
+    vec2 l = (q - BL0) / BLS;
+    if (l.x > 0.0 && l.y > 0.0 && l.x < 1.0 && l.y < 1.0) {
+      vec2 e = min(l, 1.0 - l) * BLS;
+      float m = smoothstep(0.0, 42.0, min(e.x, e.y));
+      vec3 v = mix(sheet(uFA, l), sheet(uFB, l), uFK);   // between two film frames, so 24 fps plays smooth at 60
+      if (uAltK > 0.0) v = mix(v, sheet(uAlt, l), uAltK);
+      c = mix(c, v, m * uBlinkMix);
+    }
+  }
+  return c;
+}
+// switching off: the picture collapses into a line, the line into a dot
+vec3 switchOff(vec2 q) {
+  float a = clamp(uOffT / 0.3, 0.0, 1.0), b = clamp((uOffT - 0.34) / 0.3, 0.0, 1.0);
+  float sy = max(1.0 - a * a, 0.005), sx = max(1.0 - b * b, 0.004);
+  vec2 d = q - SC, hs = SH * vec2(sx, sy);
+  vec3 glass = tv(q) * 0.05;
+  float inside = step(abs(d.x), hs.x) * step(abs(d.y), hs.y);
+  vec3 c = screen(SC + d / vec2(sx, sy)) * (1.0 + a * 1.6);
+  c = mix(c, vec3(0.9, 1.0, 0.95), a * a * 0.9);
+  vec3 col = mix(glass, c, inside);
+  float g = exp(-pow(max(abs(d.y) - hs.y, 0.0) / (2.0 + 9.0 * a), 2.0)) * exp(-pow(max(abs(d.x) - hs.x, 0.0) / (3.0 + 26.0 * b), 2.0));
+  return col + vec3(0.8, 1.0, 0.9) * g * a * 0.85;
+}
+float screenMask(vec2 q) {
+  vec2 d = abs(q - SC) - (SH - vec2(38.0));
+  float s = length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - 38.0;
+  return 1.0 - smoothstep(-3.0, 1.0, s);
+}
+// the door of light grows out of the dot, and the pastel world shows through it
+vec3 door(vec2 p, vec3 col) {
+  if (uDoor <= 0.0) return col;
+  float t = uDoor, W = mix(3.0, max(uRes.x, uRes.y) * 2.6, pow(t, 2.3)), Hh = W * 1.55, r = W * 0.5;
+  vec2 d = p - uDot;
+  float topY = -Hh * 0.5 + r, sdf;
+  if (d.y < topY) sdf = length(vec2(d.x, d.y - topY)) - r; else sdf = max(abs(d.x) - r, d.y - Hh * 0.5);
+  float inside = 1.0 - smoothstep(-1.0, 1.0, sdf);
+  float glow = exp(-max(sdf, 0.0) / (5.0 + W * 0.09));
+  float v = clamp((p.y - (uDot.y - Hh * 0.5)) / Hh, 0.0, 1.0);
+  vec3 world = mix(vec3(0.863, 0.796, 0.91), vec3(0.953, 0.882, 0.827), v);
+  vec3 light = mix(vec3(1.0, 0.995, 0.975), world, smoothstep(0.25, 0.95, t));
+  col += vec3(1.0, 0.97, 0.92) * glow * 0.85 * (1.0 - smoothstep(0.75, 1.0, t));
+  return mix(col, light, inside);
+}
+void main() {
+  vec2 p = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y);
+  vec2 q = (p - uPlace.xy) / uPlace.z;
+  float row = floor(q.y / 6.0), tick = floor(uTime * 30.0);
+  float jump = uGlitch * step(0.66, hash(vec2(row, tick)));
+  vec2 qs = q + vec2(jump * (hash(vec2(row, tick + 7.0)) - 0.5) * 70.0, uRoll);
+  float m = screenMask(q);
+  vec3 col = tv(q);
+  if (m > 0.0) {
+    vec3 c = uOffT > 0.0 ? switchOff(qs) : screen(qs);
+    {                                                 // snow: always a faint layer, more when the set loses the signal for a moment
+      float fr = floor(uTime * 50.0);
+      float n1 = hash(floor(p / vec2(1.7, 2.3)) + fr * vec2(17.13, 9.71));
+      float rv = hash(vec2(floor(p.y / 2.3), fr * 3.1));
+      vec3 snow = vec3(n1 * 0.72 + rv * 0.28) * vec3(0.8, 0.93, 0.88);
+      float band = exp(-pow((q.y - (SC.y - SH.y + mod(uTime * 820.0, SH.y * 2.0))) / 24.0, 2.0));
+      float amt = (0.07 + uStatic * 0.5) * (1.0 - uOffT);
+      c = mix(c, snow, amt) + vec3(0.62, 0.8, 0.74) * band * uStatic * 0.16;
+    }
+    float scan = 0.95 + 0.05 * sin(p.y * 2.1);
+    float bar = 1.0 + 0.085 * exp(-pow((q.y - (mod(uTime * 70.0, 760.0) + 140.0)) / 46.0, 2.0)) * (1.0 - uOffT);
+    float grain = (hash(p * 0.75 + fract(uTime * 7.31) * 113.0) - 0.5) * 0.075 * (1.0 - uOffT * 0.7);
+    float flick = 1.0 + 0.012 * sin(uTime * 61.0);
+    c = c * scan * bar * flick + grain;
+    c += vec3(0.0, 0.03, 0.02) * jump;
+    col = mix(col, c, m);
+  }
+  vec2 e = min(q, IMG - q);
+  col = mix(uBg, col, smoothstep(0.0, 70.0, min(e.x, e.y)));
+  if (q.x < 0.0 || q.y < 0.0 || q.x > IMG.x || q.y > IMG.y) col = uBg;
+  gl_FragColor = vec4(door(p, col), 1.0);
+}`;
+
+// ---------- no WebGL: show the photograph, keep the way in ----------
+if (!gl) {
+  const im = new Image(); im.src = 'assets/tv.webp'; im.className = 'fallback'; im.alt = ''; document.body.prepend(im); cv.remove();
+  ui.classList.remove('hold'); btn.addEventListener('click', () => { ui.classList.add('gone'); endEl.hidden = false; requestAnimationFrame(() => endEl.classList.add('on')); });
+  return;
+}
+
+function sh(type, src) { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; }
+const prog = gl.createProgram(); gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+gl.useProgram(prog);
+const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+const aLoc = gl.getAttribLocation(prog, 'a'); gl.enableVertexAttribArray(aLoc); gl.vertexAttribPointer(aLoc, 2, gl.FLOAT, false, 0, 0);
+const u = {}; ['uTv', 'uBlink', 'uRes', 'uDot', 'uGaze', 'uPlace', 'uBg', 'uU', 'uL', 'uClose', 'uBlinkMix', 'uHasBlink', 'uTime', 'uOffT', 'uDoor', 'uGlitch', 'uLidG', 'uPupil', 'uStatic', 'uRoll', 'uFace', 'uFA', 'uFB', 'uFK', 'uAlt', 'uAltK', 'uG0', 'uHasG', 'uGRows', 'uKA', 'uKB', 'uKMix', 'uLookA', 'uLookB', 'uResA', 'uResB', 'uTrust'].forEach(n => { u[n] = gl.getUniformLocation(prog, n); });
+gl.uniform1fv(u.uU, new Float32Array(UPPER)); gl.uniform1fv(u.uL, new Float32Array(LOWER));
+gl.uniform3f(u.uBg, 2 / 255, 3 / 255, 3 / 255); gl.uniform1i(u.uTv, 0); gl.uniform1i(u.uBlink, 1); gl.uniform1i(u.uG0, 2);
+function texture(unit, img) {
+  const t = gl.createTexture(); gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, img);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+}
+const load = src => new Promise((res, rej) => { const im = new Image(); im.decoding = 'async'; im.onload = () => res(im); im.onerror = rej; im.src = src; });
+// the pictures arrive inside small scripts (assets/tv.js, assets/blink.js), so WebGL can use them even from file://
+const script = name => new Promise((res, rej) => { const s = document.createElement('script'); s.src = `assets/${name}.js`; s.async = true; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
+const picture = name => new Promise((res, rej) => {
+  const s = document.createElement('script'); s.src = `assets/${name}.js`; s.async = true;
+  s.onload = () => load(window.NADAREO_EYE[name]).then(res, rej); s.onerror = rej; document.head.appendChild(s);
+});
+
+// ---------- layout: the television always fits, the words sit above and below it ----------
+let W = 0, H = 0, dpr = 1, S = 1, ox = 0, oy = 0, eyeX = 0, eyeY = 0;
+function layout() {
+  W = innerWidth; H = innerHeight; dpr = Math.min(devicePixelRatio || 1, 1.75);
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); gl.viewport(0, 0, cv.width, cv.height);
+  const phone = W < 700, tvW = TV_BOX[2] - TV_BOX[0], tvH = TV_BOX[3] - TV_BOX[1];
+  S = Math.min((phone ? .94 : .6) * W / tvW, (phone ? .6 : .66) * H / tvH);
+  ox = W / 2 - TV_MID[0] * S; oy = H * (phone ? .47 : .47) - TV_MID[1] * S;
+  eyeX = ox + IRIS[0] * S; eyeY = oy + IRIS[1] * S;
+  const r = document.documentElement.style;
+  r.setProperty('--brandY', Math.max(18, oy + TV_BOX[1] * S - Math.max(52, H * .075)) + 'px');
+  r.setProperty('--enterY', (oy + TV_BOX[3] * S + Math.max(14, H * .03)) + 'px');
+}
+addEventListener('resize', layout);
+
+// ---------- the gaze: saccades, smooth pursuit and fixation, the way a real eye moves ----------
+const P = { x: 0, y: 0, on: false, last: -1e9 };
+const g = { x: 0, y: 0 };                           // what the shader draws: the iris offset, in picture pixels
+const E = { fx: 0, fy: 0, sacc: null, end: 0, ptx: 0, pty: 0, mx: 0, my: 0, mAt: 0, dx: 0, dy: 0, lid: 0, dil: 0 };
+let idleT = null, idleAt = 0, look = null, gazeLock = null;
+const coarse = matchMedia('(pointer: coarse)').matches;
+function onPointer(e) { P.x = e.clientX; P.y = e.clientY; P.on = true; P.last = performance.now(); }
+addEventListener('pointermove', onPointer, { passive: true });
+addEventListener('pointerdown', onPointer, { passive: true });
+document.addEventListener('pointerleave', () => { P.on = false; });
+// where it wants to look, in iris pixels
+function desired(now) {
+  if (gazeLock) return gazeLock;                    // held on one look, so the film can take over
+  let tx, ty;
+  if (look) { tx = look[0]; ty = look[1]; }
+  else if (P.on && now - P.last < (coarse ? 2200 : 4500)) { tx = P.x; ty = P.y; }
+  else {                                            // nobody moving: mostly it watches you, now and then it glances away
+    if (now > idleAt) {
+      idleT = Math.random() < .55 ? null : [W * (.1 + Math.random() * .8), H * (.15 + Math.random() * .7)];
+      idleAt = now + 1400 + Math.random() * 2400;
+    }
+    if (!idleT) return [0, 0];
+    tx = idleT[0]; ty = idleT[1];
+  }
+  const R = Math.max(W, H) * .3, dx = tx - eyeX, dy = ty - eyeY;
+  return [Math.tanh(dx / R) * 50, Math.tanh(dy / R) * (dy > 0 ? 18 : 28)];
+}
+function updateGaze(now, dt) {
+  const [tx, ty] = desired(now);
+  const speed = Math.hypot(tx - E.ptx, ty - E.pty) / Math.max(dt, 1e-3); E.ptx = tx; E.pty = ty;
+  if (E.sacc) {                                     // a saccade: quick, decisive, landing a touch past the mark
+    const s = E.sacc, k = Math.min(1, (now - s.t0) / s.d), e = 1 - Math.pow(1 - k, 2.6);
+    E.fx = s.x0 + (s.x1 - s.x0) * e; E.fy = s.y0 + (s.y1 - s.y0) * e;
+    if (k >= 1) { E.sacc = null; E.end = now; }
+  } else {
+    const ex = tx - E.fx, ey = ty - E.fy, err = Math.hypot(ex, ey), slow = speed < 70;
+    // a slow target is followed smoothly; a jump is caught with a saccade
+    if (err > 2.4 && now - E.end > 120 && !(slow && err < 5)) {
+      const over = calm ? 1 : 1.035;
+      E.sacc = { x0: E.fx, y0: E.fy, x1: E.fx + ex * over, y1: E.fy + ey * over, t0: now, d: calm ? 180 : 34 + err * 2.4 };
+    } else { const k = 1 - Math.exp(-dt * (slow ? 9 : 5)); E.fx += ex * k; E.fy += ey * k; }
+  }
+  // holding still is never perfectly still: a slow drift, and tiny micro-saccades
+  if (!calm) {
+    E.dx += (Math.random() - .5) * dt * 4; E.dy += (Math.random() - .5) * dt * 3; E.dx *= 1 - dt * 1.2; E.dy *= 1 - dt * 1.2;
+    if (!E.sacc && now > E.mAt) { E.mx = (Math.random() - .5) * 1.8; E.my = (Math.random() - .5) * 1.1; E.mAt = now + 700 + Math.random() * 1600; }
+  }
+  g.x = E.fx + E.mx + E.dx; g.y = E.fy + E.my + E.dy;
+  // the upper lid rides on a downward look, a few hundredths of a second behind it
+  const ly = LK.looks && LK.a >= 0 ? residual(LK.looks[LK.a])[1] : g.y;   // on a real frame the lid is already right: only the extra look moves it
+  E.lid += (Math.max(ly, 0) - E.lid) * (1 - Math.exp(-dt * 15));
+}
+
+// ---------- the looking frames: the frame on screen is always a real one ----------
+// Each film frame in assets/gaze.js is measured: where its iris looks (dx, dy). The eye shows the frame that looks
+// closest to where it wants to look, and slides the iris the last few pixels. Changing frame is a 55 ms hand-over,
+// the length of a real saccade, so it reads as the eye moving, not as a cut.
+const LK = { looks: null, a: -1, b: -1, mix: 0, t0: 0, last: 0 };
+const lookCost = (l, x, y) => Math.hypot(l[0] - x, (l[1] - y) * 1.3);
+function updateLooks(now) {
+  if (!LK.looks) return;
+  if (LK.b >= 0) {
+    LK.mix = Math.min(1, (now - LK.t0) / (calm ? 120 : 55));
+    if (LK.mix >= 1) { LK.a = LK.b; LK.b = -1; LK.mix = 0; LK.last = now; }
+    return;
+  }
+  const L = LK.looks; let best = 0, bc = 1e9;
+  for (let i = 0; i < L.length; i++) { const c = lookCost(L[i], g.x, g.y); if (c < bc) { bc = c; best = i; } }
+  if (LK.a < 0) { LK.a = best; return; }
+  const cur = lookCost(L[LK.a], g.x, g.y);
+  if (best !== LK.a && now - LK.last > 70 && (bc < cur - 3.5 || cur > 16)) { LK.b = best; LK.t0 = now; LK.mix = 0; }
+}
+// only frames whose look was measured cleanly (the near-straight ones) get the drawn slide; the rest stay exactly as filmed
+const trusted = l => l[3] === undefined || l[3] < 13;
+const residual = l => trusted(l) ? [Math.max(-12, Math.min(12, g.x - l[0])), Math.max(-6, Math.min(6, g.y - l[1]))] : [0, 0];
+
+// ---------- the eye closing, opening, blinking, and the television switching off ----------
+const st = { close: 0, blinkMix: 0, blinkF: CLOSE0, alt: 0, altK: 0, off: 0, door: 0, glitch: 0, static: 0, roll: 0 };
+let hasBlink = 0, run = 0, entering = false, shut = false, hovering = false, blinking = false;
+const ease = { in: k => k * k * k, out: k => 1 - Math.pow(1 - k, 3), io: k => k < .5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2, lin: k => k };
+function tween(key, to, ms, e = ease.io, id = run) {
+  return new Promise(res => {
+    const from = st[key], t0 = performance.now();
+    const f = now => {
+      if (id !== run) return res(false);
+      const k = Math.min(1, (now - t0) / Math.max(1, calm ? ms * .4 : ms)); st[key] = from + (to - from) * e(k);
+      k < 1 ? requestAnimationFrame(f) : res(true);
+    };
+    requestAnimationFrame(f);
+  });
+}
+const wait = ms => new Promise(r => setTimeout(r, calm ? ms * .4 : ms));
+function pulse(amount, ms) { if (calm) return; st.glitch = amount; setTimeout(() => { st.glitch = 0; }, ms); }
+function enterAim() { const r = btn.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }
+
+// The film takes over only where it starts exactly like the picture: the drawn eye first takes the film's look,
+// then the film plays at its own 24 frames a second, and it hands back to the picture on a frame that matches.
+async function lockGaze(id, G) {
+  gazeLock = G; await wait(40);
+  const t = performance.now(); while (E.sacc && performance.now() - t < 400) await wait(16);
+  await wait(60); return id === run;
+}
+const playTo = (to, id, speed = 1) => tween('blinkF', to, Math.abs(to - st.blinkF) / FILM_FPS * 1000 / speed, ease.lin, id);
+async function closeEye(fast) {
+  const id = ++run; shut = true; blinking = false;
+  if (!hasBlink) { look = enterAim(); await wait(fast ? 60 : 200); return tween('close', 1, fast ? 200 : 320, ease.io, id); }
+  if (st.blinkMix > 0 && st.blinkF <= OPEN1) return playTo(OPEN0, id);                                   // caught while opening: back down
+  if (st.blinkMix === 0) {
+    if (!fast) { look = enterAim(); await wait(340); if (id !== run) return false; }                     // a glance at the word
+    if (!await lockGaze(id, G_CLOSE)) return false;                                                      // then back at you
+    st.blinkF = CLOSE0; st.altK = 0;
+    if (!await tween('blinkMix', 1, fast ? 90 : 150, ease.io, id)) return false;   // the hand-over happens on a still frame
+  }
+  return playTo(CLOSE1, id, fast ? 1.25 : 1);                                                             // and it closes, on film
+}
+async function openEye() {
+  if (entering) return;
+  const id = ++run; shut = false; blinking = false;
+  if (st.blinkMix > 0) {
+    if (st.blinkF > OPEN1 && st.blinkF < CLOSE1 - 3) {                // only half closed: run the close backwards, hand back
+      gazeLock = G_CLOSE;
+      if (!await playTo(CLOSE0, id)) return;
+      if (!await tween('blinkMix', 0, 150, ease.io, id)) return;
+      look = null; gazeLock = null; return;
+    }
+    gazeLock = G_OPEN;                                                // underneath, the drawn eye already takes the film's last look
+    if (st.blinkF > OPEN1) {                                          // shut in the closing take: cross to the opening take's shut frame
+      st.alt = OPEN0; if (!await tween('altK', 1, 120, ease.lin, id)) return; st.blinkF = OPEN0; st.altK = 0;
+    }
+    if (!await playTo(OPEN1, id)) return;
+    if (!await tween('blinkMix', 0, 160, ease.io, id)) return;                 // and back to the picture, on a still frame
+  }
+  if (st.close > 0 && !await tween('close', 0, 260, ease.out, id)) return;
+  look = null; gazeLock = null;
+}
+// a natural blink every few seconds, when it is looking at you
+let nextBlink = performance.now() + 2600 + Math.random() * 2600;
+async function idleBlink(now) {
+  if (!hasBlink || shut || entering || hovering || blinking) return;
+  if (Math.hypot(E.fx, E.fy) > 9 && P.on && now - P.last < 1600) { nextBlink = now + 900; return; }   // busy following you: later
+  const id = ++run; blinking = true;
+  const done = () => { if (id === run) { gazeLock = null; blinking = false; } };
+  if (!await lockGaze(id, G_CLOSE)) return done();
+  st.blinkF = CLOSE0; st.altK = 0;
+  if (!await tween('blinkMix', 1, 70, ease.io, id)) return done();
+  if (!await playTo(CLOSE1 - 1, id, 3)) return done();
+  gazeLock = G_OPEN; st.alt = OPEN0 + 1;
+  if (!await tween('altK', 1, 45, ease.lin, id)) return done();
+  st.blinkF = OPEN0 + 1; st.altK = 0;
+  if (!await playTo(OPEN1, id, 2.4)) return done();
+  await tween('blinkMix', 0, 110, ease.io, id);
+  done();
+}
+// now and then the set loses the signal for a moment: a little snow, or a slipped line
+let nextSignal = performance.now() + 2500;
+function snow(amount, ms) {
+  if (calm) return;
+  const t0 = performance.now();
+  const f = now => {
+    const k = (now - t0) / ms; if (k >= 1) { st.static = 0; st.roll = 0; return; }
+    const env = Math.min(1, k / .12) * Math.min(1, (1 - k) / .4);
+    st.static = amount * env * (.78 + Math.random() * .22); st.roll = (Math.random() - .5) * 4 * env;
+    requestAnimationFrame(f);
+  };
+  requestAnimationFrame(f);
+}
+function signal(now) {
+  if (calm || entering || shut || blinking || now < nextSignal) return;
+  nextSignal = now + 4200 + Math.random() * 4800;
+  if (Math.random() < .75) { snow(.5 + Math.random() * .35, 180 + Math.random() * 280); if (Math.random() < .3) setTimeout(() => snow(.4, 140), 420); }
+  else pulse(.3, 70);
+}
+async function enter() {
+  if (entering) return; entering = true; ui.classList.add('gone');
+  const isShut = st.blinkMix > .99 && (st.blinkF > CLOSE1 - .5 || st.blinkF < OPEN0 + .5) || st.close > .98;
+  if (!isShut) await closeEye(true); else await wait(80);
+  await wait(300);
+  snow(.9, 190); await wait(150);
+  const id = run; await tween('off', 1, calm ? 300 : 950, ease.lin, id);
+  await wait(260);
+  await tween('door', 1, calm ? 500 : 1700, ease.io, id);
+  endEl.hidden = false; requestAnimationFrame(() => endEl.classList.add('on'));
+}
+function reset() {
+  run++; entering = false; shut = false; look = null; gazeLock = null; hovering = false; blinking = false;
+  Object.assign(st, { close: 0, blinkMix: 0, blinkF: CLOSE0, alt: 0, altK: 0, off: 0, door: 0, glitch: 0, static: 0, roll: 0 });
+  endEl.classList.remove('on'); setTimeout(() => { endEl.hidden = true; }, 600);
+  ui.classList.remove('gone');
+}
+btn.addEventListener('pointerenter', e => { if (e.pointerType === 'mouse' && !entering) { hovering = true; closeEye(false); } });
+btn.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !entering) { hovering = false; openEye(); } });
+btn.addEventListener('focus', () => { if (!entering && !btn.matches(':hover')) { hovering = true; closeEye(false); } });
+btn.addEventListener('blur', () => { if (!entering) { hovering = false; openEye(); } });
+btn.addEventListener('click', enter);
+$('#again').addEventListener('click', reset);
+
+// ---------- the frame loop ----------
+let t0 = performance.now(), last = t0;
+function frame(now) {
+  const dt = Math.min(.05, (now - last) / 1000); last = now; const t = (now - t0) / 1000;
+  updateGaze(now, dt);
+  updateLooks(now);
+  signal(now);
+  if (!calm && now > nextBlink) { nextBlink = now + 3200 + Math.random() * 4800; idleBlink(now); }
+  // the pupil breathes, opens a little when you reach for Enter, narrows in the snow's light
+  E.dil += ((hovering ? .13 : 0) - E.dil) * (1 - Math.exp(-dt * 3));
+  const pup = calm ? 1 : 1 + .028 * Math.sin(t * 1.7) + .018 * Math.sin(t * 3.3 + 1.1) + E.dil - st.static * .05;
+  gl.uniform1f(u.uLidG, E.lid); gl.uniform1f(u.uPupil, pup);
+  gl.uniform1f(u.uStatic, st.static); gl.uniform1f(u.uRoll, st.roll);
+  if (calm) gl.uniform3f(u.uFace, 0, 0, 1);
+  else gl.uniform3f(u.uFace, .7 * Math.sin(t * .31) + .35 * Math.sin(t * .77 + 2), .55 * Math.sin(t * .43 + 1.3), 1 - .0016 * Math.sin(t * .27));
+  gl.uniform2f(u.uRes, cv.width, cv.height);
+  gl.uniform3f(u.uPlace, ox * dpr, oy * dpr, S * dpr);
+  gl.uniform2f(u.uGaze, g.x, g.y);
+  if (LK.looks && LK.a >= 0) {
+    const la = LK.looks[LK.a], ra = residual(la);
+    gl.uniform1f(u.uKA, LK.a); gl.uniform2f(u.uLookA, la[0], la[1]); gl.uniform2f(u.uResA, ra[0], ra[1]);
+    gl.uniform2f(u.uTrust, trusted(la) ? 1 : 0, LK.b >= 0 && trusted(LK.looks[LK.b]) ? 1 : 0);
+    if (LK.b >= 0) { const lb = LK.looks[LK.b], rb = residual(lb); gl.uniform1f(u.uKB, LK.b); gl.uniform2f(u.uLookB, lb[0], lb[1]); gl.uniform2f(u.uResB, rb[0], rb[1]); gl.uniform1f(u.uKMix, ease.io(LK.mix)); }
+    else gl.uniform1f(u.uKMix, 0);
+  } else { gl.uniform1f(u.uKA, -1); gl.uniform2f(u.uLookA, 0, 0); gl.uniform2f(u.uResA, g.x, g.y); gl.uniform1f(u.uKMix, 0); gl.uniform2f(u.uTrust, 1, 1); }
+  gl.uniform2f(u.uDot, (ox + 769 * S) * dpr, (oy + 459 * S) * dpr);
+  const fa = Math.floor(st.blinkF + 1e-4), fb = Math.min(fa + 1, fa <= OPEN1 ? OPEN1 : CLOSE1);
+  gl.uniform1f(u.uClose, st.close); gl.uniform1f(u.uBlinkMix, st.blinkMix);
+  gl.uniform1f(u.uFA, fa); gl.uniform1f(u.uFB, fb); gl.uniform1f(u.uFK, st.blinkF - fa); gl.uniform1f(u.uAlt, st.alt); gl.uniform1f(u.uAltK, st.altK);
+  gl.uniform1f(u.uHasBlink, hasBlink); gl.uniform1f(u.uTime, (now - t0) / 1000);
+  gl.uniform1f(u.uOffT, st.off); gl.uniform1f(u.uDoor, st.door); gl.uniform1f(u.uGlitch, st.glitch);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  if (window.__eyeHook) window.__eyeHook(cv);        // for testing only: lets a test copy each frame as it is drawn
+  requestAnimationFrame(frame);
+}
+
+// ---------- start: the photograph first, the blink right after ----------
+layout();
+picture('tv').then(im => {
+  texture(0, im);
+  // until the blink sheet arrives, unit 1 holds a 1 x 1 placeholder so the shader always has a texture
+  const ph = gl.createTexture(); gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, ph);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, 1, 1, 0, gl.RGB, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0]));
+  const ph2 = gl.createTexture(); gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, ph2);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, 1, 1, 0, gl.RGB, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0]));
+  requestAnimationFrame(frame);
+  requestAnimationFrame(() => ui.classList.remove('hold'));
+  return script('gaze').then(() => load(window.NADAREO_EYE.gaze0));
+}).then(im => {
+  const meta = window.NADAREO_EYE.gaze; texture(2, im);
+  gl.uniform1f(u.uGRows, meta.sheets[0]); gl.uniform1f(u.uHasG, 1); LK.looks = meta.looks;
+  return picture('film');
+}).then(im => { texture(1, im); hasBlink = 1; }).catch(err => console.error('NADAREO eye:', err && (err.message || err.type || err)));
+window.__eye = { st, g, E, P, LK, enter, reset, closeEye, openEye, snow, blink: () => idleBlink(performance.now()), get hasBlink() { return hasBlink; } };
+})();
+</script>
+</body>
+</html>
